@@ -138,6 +138,8 @@ def read_room(room_code: str):
         "wager": room.wager,
         "winningScore": room.winning_score,
         "pongBallSpeed": room.pong_ball_speed,
+        "maxPauseSeconds": room.max_pause_seconds,
+        "pausesPerPlayer": room.pauses_per_player,
     }
 
 
@@ -227,6 +229,8 @@ async def websocket_room(
                     room.set_game_settings(
                         winning_score=int(message.get("winningScore", room.winning_score)),
                         pong_ball_speed=float(message.get("pongBallSpeed", room.pong_ball_speed)),
+                        max_pause_seconds=int(message.get("maxPauseSeconds", room.max_pause_seconds)),
+                        pauses_per_player=int(message.get("pausesPerPlayer", room.pauses_per_player)),
                     )
                 except (TypeError, ValueError) as error:
                     await websocket.send_json({"type": "error", "message": str(error)})
@@ -263,6 +267,20 @@ async def websocket_room(
                     await target_socket.close()
 
                 remove_player(room_code, target_player_id)
+                await broadcast_room_state(room_code)
+
+            elif message_type == "pause":
+                try:
+                    room.game.request_pause(player_id)
+                except ValueError as error:
+                    await websocket.send_json({"type": "error", "message": str(error)})
+                    continue
+
+                await broadcast_message(room_code, {
+                    "type": "paused",
+                    "message": f"{room.player_names.get(player_id, player_id)} paused the game for up to {room.max_pause_seconds} seconds.",
+                    "playerId": player_id,
+                })
                 await broadcast_room_state(room_code)
 
             elif message_type == "tick":
@@ -398,6 +416,8 @@ async def broadcast_room_state(room_code: str):
                     "wager": room.wager,
                     "winningScore": room.winning_score,
                     "pongBallSpeed": room.pong_ball_speed,
+                    "maxPauseSeconds": room.max_pause_seconds,
+                    "pausesPerPlayer": room.pauses_per_player,
                     "game": room.game.to_dict()
                 }
             })

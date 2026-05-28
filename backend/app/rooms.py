@@ -37,6 +37,8 @@ class Room:
     wager: int = 0
     winning_score: int = 5
     pong_ball_speed: float = 5
+    max_pause_seconds: int = 30
+    pauses_per_player: int = 2
     paid_out: bool = False
     game: PongGame = field(default_factory=PongGame)
 
@@ -72,18 +74,28 @@ class Room:
             raise ValueError("Wager is too high.")
         self.wager = wager
 
-    def set_game_settings(self, winning_score: int, pong_ball_speed: float):
+    def set_game_settings(
+            self,
+            winning_score: int,
+            pong_ball_speed: float,
+            max_pause_seconds: int,
+            pauses_per_player: int,
+    ):
         if self.game.started:
             raise ValueError("You cannot change game settings after the game starts.")
 
         self.winning_score = PongGame.clean_winning_score(winning_score)
         self.pong_ball_speed = PongGame.clean_ball_speed(pong_ball_speed)
+        self.max_pause_seconds = PongGame.clean_max_pause_seconds(max_pause_seconds)
+        self.pauses_per_player = PongGame.clean_pauses_per_player(pauses_per_player)
         self.reset_game()
 
     def reset_game(self):
         self.game = PongGame(
             winning_score=self.winning_score,
             ball_speed=self.pong_ball_speed,
+            max_pause_seconds=self.max_pause_seconds,
+            pauses_per_player=self.pauses_per_player,
         )
         self.paid_out = False
 

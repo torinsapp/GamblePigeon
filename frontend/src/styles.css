@@ -434,3 +434,13 @@ button.danger {
     color: #94a3b8;
     line-height: 1.45;
 }
+
+.pause-banner {
+    display: inline-block;
+    padding: 8px 12px;
+    border: 1px solid #facc15;
+    border-radius: 999px;
+    background: rgba(250, 204, 21, 0.12);
+    color: #fef3c7 !important;
+    font-weight: 800;
+}

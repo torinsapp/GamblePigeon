@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -19,8 +20,18 @@ class Ball:
 class PongGame:
     MIN_BALL_SPEED = 3
     MAX_BALL_SPEED = 14
+    MIN_PAUSE_SECONDS = 5
+    MAX_PAUSE_SECONDS = 300
+    MIN_PAUSES_PER_PLAYER = 0
+    MAX_PAUSES_PER_PLAYER = 20
 
-    def __init__(self, winning_score: int = 5, ball_speed: float = 5):
+    def __init__(
+            self,
+            winning_score: int = 5,
+            ball_speed: float = 5,
+            max_pause_seconds: int = 30,
+            pauses_per_player: int = 2,
+    ):
         self.width = 800
         self.height = 500
         self.paddle_width = 12
@@ -29,10 +40,17 @@ class PongGame:
         self.paddle_speed = 8
         self.winning_score = self.clean_winning_score(winning_score)
         self.ball_speed = self.clean_ball_speed(ball_speed)
+        self.max_pause_seconds = self.clean_max_pause_seconds(max_pause_seconds)
+        self.pauses_per_player = self.clean_pauses_per_player(pauses_per_player)
 
         self.started = False
         self.finished = False
         self.winner: Optional[str] = None
+        self.paused = False
+        self.pause_started_at: Optional[float] = None
+        self.pause_ends_at: Optional[float] = None
+        self.paused_by: Optional[str] = None
+        self.pause_counts: Dict[str, int] = {}
 
         self.player1 = Paddle()
         self.player2 = Paddle()
@@ -51,8 +69,16 @@ class PongGame:
     def clean_ball_speed(cls, ball_speed: float) -> float:
         return max(cls.MIN_BALL_SPEED, min(cls.MAX_BALL_SPEED, float(ball_speed)))
 
+    @classmethod
+    def clean_max_pause_seconds(cls, max_pause_seconds: int) -> int:
+        return max(cls.MIN_PAUSE_SECONDS, min(cls.MAX_PAUSE_SECONDS, int(max_pause_seconds)))
+
+    @classmethod
+    def clean_pauses_per_player(cls, pauses_per_player: int) -> int:
+        return max(cls.MIN_PAUSES_PER_PLAYER, min(cls.MAX_PAUSES_PER_PLAYER, int(pauses_per_player)))
+
     def set_paddle_direction(self, player_id: str, direction: str):
-        if self.finished:
+        if self.finished or self.paused:
             return
 
         if player_id == "player1":
@@ -64,9 +90,52 @@ class PongGame:
         self.started = True
         self.finished = False
         self.winner = None
+        self.paused = False
+        self.pause_started_at = None
+        self.pause_ends_at = None
+        self.paused_by = None
+        self.pause_counts = {}
+
+    def request_pause(self, player_id: str):
+        if not self.started or self.finished:
+            raise ValueError("The game is not running.")
+        if self.paused:
+            raise ValueError("The game is already paused.")
+        if self.pauses_per_player <= 0:
+            raise ValueError("Pauses are disabled for this game.")
+
+        used_pauses = self.pause_counts.get(player_id, 0)
+        if used_pauses >= self.pauses_per_player:
+            raise ValueError("You have no pauses left this game.")
+
+        now = time.monotonic()
+        self.pause_counts[player_id] = used_pauses + 1
+        self.paused = True
+        self.pause_started_at = now
+        self.pause_ends_at = now + self.max_pause_seconds
+        self.paused_by = player_id
+        self.player1.direction = "none"
+        self.player2.direction = "none"
+
+    def resume(self):
+        self.paused = False
+        self.pause_started_at = None
+        self.pause_ends_at = None
+        self.paused_by = None
+
+    def pause_seconds_remaining(self) -> int:
+        if not self.paused or self.pause_ends_at is None:
+            return 0
+
+        return max(0, int(round(self.pause_ends_at - time.monotonic())))
 
     def tick(self):
         if not self.started or self.finished:
+            return
+
+        if self.paused:
+            if self.pause_seconds_remaining() <= 0:
+                self.resume()
             return
 
         self.move_paddle(self.player1)
@@ -133,6 +202,10 @@ class PongGame:
         self.started = False
         self.finished = True
         self.winner = winner
+        self.paused = False
+        self.pause_started_at = None
+        self.pause_ends_at = None
+        self.paused_by = None
         self.player1.direction = "none"
         self.player2.direction = "none"
 
@@ -151,6 +224,12 @@ class PongGame:
             "winner": self.winner,
             "winningScore": self.winning_score,
             "ballSpeed": self.ball_speed,
+            "paused": self.paused,
+            "pausedBy": self.paused_by,
+            "pauseSecondsRemaining": self.pause_seconds_remaining(),
+            "maxPauseSeconds": self.max_pause_seconds,
+            "pausesPerPlayer": self.pauses_per_player,
+            "pauseCounts": self.pause_counts,
             "paddles": {
                 "player1": {
                     "x": 30,

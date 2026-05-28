@@ -20,6 +20,12 @@ type GameState = {
     winner: string | null;
     winningScore: number;
     ballSpeed: number;
+    paused: boolean;
+    pausedBy: string | null;
+    pauseSecondsRemaining: number;
+    maxPauseSeconds: number;
+    pausesPerPlayer: number;
+    pauseCounts: Record<string, number>;
     paddles: {
         player1: Paddle;
         player2: Paddle;
@@ -59,6 +65,8 @@ type RoomState = {
     wager: number;
     winningScore: number;
     pongBallSpeed: number;
+    maxPauseSeconds: number;
+    pausesPerPlayer: number;
     game: GameState;
 };
 
@@ -106,6 +114,8 @@ export default function RoomPage() {
     const [draftWager, setDraftWager] = useState("0");
     const [draftWinningScore, setDraftWinningScore] = useState("5");
     const [draftPongBallSpeed, setDraftPongBallSpeed] = useState("5");
+    const [draftMaxPauseSeconds, setDraftMaxPauseSeconds] = useState("30");
+    const [draftPausesPerPlayer, setDraftPausesPerPlayer] = useState("2");
 
     const shareUrl = window.location.href;
     const currentPlayer = room?.players.find((player) => player.id === playerId);
@@ -114,6 +124,11 @@ export default function RoomPage() {
     const winnerName = room?.game.winner
         ? room.players.find((player) => player.id === room.game.winner)?.name ?? room.game.winner
         : null;
+    const pausedByName = room?.game.pausedBy
+        ? room.players.find((player) => player.id === room.game.pausedBy)?.name ?? room.game.pausedBy
+        : null;
+    const pausesUsed = playerId && room?.game.pauseCounts ? room.game.pauseCounts[playerId] ?? 0 : 0;
+    const pausesRemaining = room ? Math.max(0, room.pausesPerPlayer - pausesUsed) : 0;
 
     useEffect(() => {
         refreshAccount();
@@ -135,8 +150,10 @@ export default function RoomPage() {
             setDraftWager(String(room.wager));
             setDraftWinningScore(String(room.winningScore));
             setDraftPongBallSpeed(String(room.pongBallSpeed));
+            setDraftMaxPauseSeconds(String(room.maxPauseSeconds));
+            setDraftPausesPerPlayer(String(room.pausesPerPlayer));
         }
-    }, [room?.wager, room?.winningScore, room?.pongBallSpeed]);
+    }, [room?.wager, room?.winningScore, room?.pongBallSpeed, room?.maxPauseSeconds, room?.pausesPerPlayer]);
 
     useEffect(() => {
         if (!roomCode) {
@@ -179,6 +196,10 @@ export default function RoomPage() {
             }
 
             if (message.type === "game_over") {
+                setNotice(message.message);
+            }
+
+            if (message.type === "paused") {
                 setNotice(message.message);
             }
 
@@ -324,15 +345,19 @@ export default function RoomPage() {
     function saveGameSettings() {
         const winningScore = Math.max(1, Math.min(50, Math.floor(Number(draftWinningScore) || 5)));
         const pongBallSpeed = Math.max(3, Math.min(14, Number(draftPongBallSpeed) || 5));
+        const maxPauseSeconds = Math.max(5, Math.min(300, Math.floor(Number(draftMaxPauseSeconds) || 30)));
+        const pausesPerPlayer = Math.max(0, Math.min(20, Math.floor(Number(draftPausesPerPlayer) || 0)));
 
         socketRef.current?.send(
             JSON.stringify({
                 type: "set_game_settings",
                 winningScore,
                 pongBallSpeed,
+                maxPauseSeconds,
+                pausesPerPlayer,
             })
         );
-        setNotice(`Game settings saved. First to ${winningScore}, ball speed ${pongBallSpeed}.`);
+        setNotice(`Game settings saved. First to ${winningScore}, ball speed ${pongBallSpeed}, ${pausesPerPlayer} pause(s) each.`);
     }
 
     function saveWager() {
@@ -344,6 +369,14 @@ export default function RoomPage() {
             })
         );
         setNotice(nextWager > 0 ? `Wager set to $${nextWager}.` : "Wager disabled.");
+    }
+
+    function pauseGame() {
+        socketRef.current?.send(
+            JSON.stringify({
+                type: "pause",
+            })
+        );
     }
 
     function kickPlayer(targetPlayerId: string) {
@@ -411,6 +444,18 @@ export default function RoomPage() {
         ctx.fillText(String(game.score.player1), game.width / 2 - 70, 50);
         ctx.fillText(String(game.score.player2), game.width / 2 + 50, 50);
 
+        if (game.paused) {
+            ctx.fillStyle = "rgba(2, 6, 23, 0.72)";
+            ctx.fillRect(0, 0, game.width, game.height);
+            ctx.fillStyle = "white";
+            ctx.font = "42px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Paused", game.width / 2, game.height / 2 - 16);
+            ctx.font = "24px Arial";
+            ctx.fillText(`${game.pauseSecondsRemaining}s remaining`, game.width / 2, game.height / 2 + 28);
+            ctx.textAlign = "start";
+        }
+
         if (game.finished) {
             ctx.fillStyle = "rgba(2, 6, 23, 0.72)";
             ctx.fillRect(0, 0, game.width, game.height);
@@ -435,6 +480,8 @@ export default function RoomPage() {
                     <p>Players: {room?.players.length ?? 0}</p>
                     <p>Game: {room?.supportedGames[room.gameName] ?? room?.gameName ?? "Loading..."}</p>
                     <p>Wager: ${room?.wager ?? 0} · First to {room?.winningScore ?? 5} · Ball speed {room?.pongBallSpeed ?? 5}</p>
+                    <p>Pauses: {pausesRemaining}/{room?.pausesPerPlayer ?? 2} left · Max {room?.maxPauseSeconds ?? 30}s</p>
+                    {room?.game.paused && <p className="pause-banner">Paused by {pausedByName}. Resumes in {room.game.pauseSecondsRemaining}s.</p>}
                     {account ? (
                         <p>Account: @{account.username} · Balance: ${account.balance}</p>
                     ) : (
@@ -458,6 +505,13 @@ export default function RoomPage() {
                         }}
                     >
                         Change Name
+                    </button>
+                    <button
+                        className="secondary"
+                        onClick={pauseGame}
+                        disabled={!room?.game.started || room?.game.finished || room?.game.paused || pausesRemaining <= 0}
+                    >
+                        Pause Game
                     </button>
                     {isHost && (
                         <button className="secondary" onClick={() => setIsManageOpen(true)}>
@@ -492,6 +546,7 @@ export default function RoomPage() {
             <p className="instructions">
                 Desktop: use W/S or Arrow Up/Down. Phone: use the Up/Down buttons.
                 {winnerName && room?.game.finished ? ` ${winnerName} won!` : ""}
+                {room?.game.paused ? ` Paused by ${pausedByName}; resumes automatically.` : ""}
             </p>
 
             {isAuthOpen && (
@@ -592,7 +647,7 @@ export default function RoomPage() {
 
                         <div className="manager-section">
                             <h3>Game Settings</h3>
-                            <p className="helper-text">These can be changed before the host starts the game. Pong currently supports first-to score and ball speed.</p>
+                            <p className="helper-text">These can be changed before the host starts the game. Pong currently supports first-to score, ball speed, and pause rules.</p>
                             <div className="settings-grid">
                                 <label className="field-label">
                                     First to
@@ -614,6 +669,28 @@ export default function RoomPage() {
                                         step={0.5}
                                         type="number"
                                         onChange={(event) => setDraftPongBallSpeed(event.target.value)}
+                                    />
+                                </label>
+
+                                <label className="field-label">
+                                    Max pause seconds
+                                    <input
+                                        value={draftMaxPauseSeconds}
+                                        min={5}
+                                        max={300}
+                                        type="number"
+                                        onChange={(event) => setDraftMaxPauseSeconds(event.target.value)}
+                                    />
+                                </label>
+
+                                <label className="field-label">
+                                    Pauses per player
+                                    <input
+                                        value={draftPausesPerPlayer}
+                                        min={0}
+                                        max={20}
+                                        type="number"
+                                        onChange={(event) => setDraftPausesPerPlayer(event.target.value)}
                                     />
                                 </label>
 
