@@ -1,0 +1,149 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #0f172a;
+    color: white;
+}
+
+button {
+    border: none;
+    border-radius: 12px;
+    padding: 12px 18px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    background: #22c55e;
+    color: #052e16;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+button.secondary {
+    background: #38bdf8;
+    color: #082f49;
+}
+
+input {
+    width: 100%;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 16px;
+    background: #020617;
+    color: white;
+}
+
+.page {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+}
+
+.card {
+    width: 100%;
+    max-width: 420px;
+    display: grid;
+    gap: 16px;
+    background: #1e293b;
+    padding: 28px;
+    border-radius: 24px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+.card h1 {
+    margin: 0;
+    font-size: 42px;
+}
+
+.subtitle {
+    margin-top: -8px;
+    color: #cbd5e1;
+}
+
+.divider {
+    text-align: center;
+    color: #94a3b8;
+}
+
+.room-page {
+    min-height: 100vh;
+    padding: 24px;
+}
+
+.room-header {
+    max-width: 900px;
+    margin: 0 auto 24px;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    align-items: center;
+}
+
+.room-header h1 {
+    margin-bottom: 4px;
+}
+
+.room-header p {
+    margin: 4px 0;
+    color: #cbd5e1;
+}
+
+.room-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.game-wrapper {
+    display: flex;
+    justify-content: center;
+}
+
+.game-canvas {
+    width: 100%;
+    max-width: 800px;
+    aspect-ratio: 8 / 5;
+    border: 2px solid #334155;
+    border-radius: 18px;
+    background: #111827;
+}
+
+.mobile-controls {
+    display: none;
+    justify-content: center;
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.instructions {
+    text-align: center;
+    color: #cbd5e1;
+}
+
+@media (max-width: 700px) {
+    .room-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .room-actions {
+        flex-direction: column;
+    }
+
+    .mobile-controls {
+        display: flex;
+    }
+
+    .mobile-controls button {
+        width: 140px;
+        height: 64px;
+    }
+}
