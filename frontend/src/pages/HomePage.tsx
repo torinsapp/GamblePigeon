@@ -19,6 +19,7 @@ export default function HomePage() {
 
             const data = await response.json();
 
+            sessionStorage.setItem(`hostToken:${data.roomCode}`, data.hostToken);
             navigate(`/room/${data.roomCode}`);
         } finally {
             setIsCreating(false);
@@ -37,26 +38,26 @@ export default function HomePage() {
 
     return (
         <main className="page">
-        <section className="card">
-            <h1>Game Night</h1>
-    <p className="subtitle">Create a lobby, share the link, and play Pong.</p>
+            <section className="card">
+                <h1>Game Night</h1>
+                <p className="subtitle">Create a lobby, share the link, and play Pong.</p>
 
-    <button onClick={createLobby} disabled={isCreating}>
-        {isCreating ? "Creating..." : "Create Lobby"}
-        </button>
+                <button onClick={createLobby} disabled={isCreating}>
+                    {isCreating ? "Creating..." : "Create Lobby"}
+                </button>
 
-        <div className="divider">or</div>
+                <div className="divider">or</div>
 
-        <input
-    value={joinCode}
-    onChange={(event) => setJoinCode(event.target.value)}
-    placeholder="Enter room code"
-    />
+                <input
+                    value={joinCode}
+                    onChange={(event) => setJoinCode(event.target.value)}
+                    placeholder="Enter room code"
+                />
 
-    <button className="secondary" onClick={joinLobby}>
-        Join Lobby
-    </button>
-    </section>
-    </main>
-);
+                <button className="secondary" onClick={joinLobby}>
+                    Join Lobby
+                </button>
+            </section>
+        </main>
+    );
 }

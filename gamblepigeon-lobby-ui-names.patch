@@ -1,0 +1,550 @@
+diff -ruN gp_old/GamblePigeon/backend/app/main.py gp2/GamblePigeon/backend/app/main.py
+--- gp_old/GamblePigeon/backend/app/main.py	2026-05-28 19:03:47.000000000 +0000
++++ gp2/GamblePigeon/backend/app/main.py	2026-05-28 19:10:23.217464168 +0000
+@@ -42,7 +42,12 @@
+ 
+ 
+ @app.websocket("/ws/rooms/{room_code}")
+-async def websocket_room(websocket: WebSocket, room_code: str, hostToken: Optional[str] = None):
++async def websocket_room(
++    websocket: WebSocket,
++    room_code: str,
++    hostToken: Optional[str] = None,
++    playerName: Optional[str] = None
++):
+     await websocket.accept()
+ 
+     room = get_room(room_code)
+@@ -51,7 +56,7 @@
+         await websocket.close()
+         return
+ 
+-    player_id = join_room(room_code, websocket, hostToken)
++    player_id = join_room(room_code, websocket, hostToken, playerName)
+ 
+     await websocket.send_json({
+         "type": "joined",
+@@ -80,6 +85,10 @@
+                 room.game.started = True
+                 await broadcast_room_state(room_code)
+ 
++            elif message_type == "set_name":
++                room.set_player_name(player_id, message.get("name"))
++                await broadcast_room_state(room_code)
++
+             elif message_type == "set_game":
+                 if not room.is_host(player_id):
+                     await websocket.send_json({"type": "error", "message": "Only the lobby host can change the game."})
+@@ -133,7 +142,14 @@
+                 "type": "state",
+                 "room": {
+                     "code": room.code,
+-                    "players": list(room.players.keys()),
++                    "players": [
++                        {
++                            "id": connected_player_id,
++                            "name": room.player_names.get(connected_player_id, connected_player_id),
++                            "isHost": connected_player_id == room.host_player_id
++                        }
++                        for connected_player_id in room.players.keys()
++                    ],
+                     "hostPlayerId": room.host_player_id,
+                     "gameName": room.game_name,
+                     "supportedGames": SUPPORTED_GAMES,
+diff -ruN gp_old/GamblePigeon/backend/app/rooms.py gp2/GamblePigeon/backend/app/rooms.py
+--- gp_old/GamblePigeon/backend/app/rooms.py	2026-05-28 19:04:54.000000000 +0000
++++ gp2/GamblePigeon/backend/app/rooms.py	2026-05-28 19:10:21.326325955 +0000
+@@ -13,6 +13,18 @@
+ }
+ 
+ 
++def clean_player_name(name: Optional[str], fallback: str) -> str:
++    if not name:
++        return fallback
++
++    cleaned_name = " ".join(str(name).strip().split())
++
++    if not cleaned_name:
++        return fallback
++
++    return cleaned_name[:24]
++
++
+ @dataclass
+ class Room:
+     code: str
+@@ -20,11 +32,15 @@
+     game_name: str = "pong"
+     host_player_id: Optional[str] = None
+     players: Dict[str, WebSocket] = field(default_factory=dict)
++    player_names: Dict[str, str] = field(default_factory=dict)
+     game: PongGame = field(default_factory=PongGame)
+ 
+     def is_host(self, player_id: str) -> bool:
+         return self.host_player_id == player_id
+ 
++    def set_player_name(self, player_id: str, name: Optional[str]):
++        self.player_names[player_id] = clean_player_name(name, player_id)
++
+     def set_game(self, game_name: str):
+         normalized_game_name = game_name.lower().strip()
+ 
+@@ -63,7 +79,12 @@
+     return rooms.get(room_code.upper())
+ 
+ 
+-def join_room(room_code: str, websocket: WebSocket, host_token: Optional[str] = None) -> str:
++def join_room(
++    room_code: str,
++    websocket: WebSocket,
++    host_token: Optional[str] = None,
++    player_name: Optional[str] = None
++) -> str:
+     room = rooms[room_code.upper()]
+ 
+     if "player1" not in room.players:
+@@ -74,6 +95,7 @@
+         player_id = f"spectator{len(room.players) + 1}"
+ 
+     room.players[player_id] = websocket
++    room.set_player_name(player_id, player_name)
+ 
+     if host_token and secrets.compare_digest(host_token, room.host_token):
+         room.host_player_id = player_id
+@@ -87,6 +109,7 @@
+         return
+ 
+     room.players.pop(player_id, None)
++    room.player_names.pop(player_id, None)
+ 
+     if room.host_player_id == player_id:
+         room.host_player_id = None
+diff -ruN gp_old/GamblePigeon/frontend/src/pages/RoomPage.tsx gp2/GamblePigeon/frontend/src/pages/RoomPage.tsx
+--- gp_old/GamblePigeon/frontend/src/pages/RoomPage.tsx	2026-05-28 19:04:08.000000000 +0000
++++ gp2/GamblePigeon/frontend/src/pages/RoomPage.tsx	2026-05-28 19:11:02.649151892 +0000
+@@ -2,6 +2,7 @@
+ import { useParams } from "react-router-dom";
+ 
+ const WS_BASE = "ws://localhost:8000";
++const PLAYER_NAME_COOKIE = "gamblepigeon_player_name";
+ 
+ type GameState = {
+     width: number;
+@@ -29,15 +30,42 @@
+     height: number;
+ };
+ 
++type RoomPlayer = {
++    id: string;
++    name: string;
++    isHost: boolean;
++};
++
+ type RoomState = {
+     code: string;
+-    players: string[];
++    players: RoomPlayer[];
+     hostPlayerId: string | null;
+     gameName: string;
+     supportedGames: Record<string, string>;
+     game: GameState;
+ };
+ 
++function readCookie(name: string): string | null {
++    const cookie = document.cookie
++        .split("; ")
++        .find((row) => row.startsWith(`${name}=`));
++
++    if (!cookie) {
++        return null;
++    }
++
++    return decodeURIComponent(cookie.split("=").slice(1).join("="));
++}
++
++function writeCookie(name: string, value: string) {
++    const maxAge = 60 * 60 * 24 * 365;
++    document.cookie = `${name}=${encodeURIComponent(value)}; Max-Age=${maxAge}; SameSite=Lax; Path=/`;
++}
++
++function defaultPlayerName() {
++    return `Player ${Math.floor(1000 + Math.random() * 9000)}`;
++}
++
+ export default function RoomPage() {
+     const { roomCode } = useParams();
+ 
+@@ -47,10 +75,20 @@
+     const [playerId, setPlayerId] = useState<string | null>(null);
+     const [room, setRoom] = useState<RoomState | null>(null);
+     const [notice, setNotice] = useState<string | null>(null);
++    const [isManageOpen, setIsManageOpen] = useState(false);
++    const [isNameOpen, setIsNameOpen] = useState(false);
++    const [playerName, setPlayerName] = useState(() => readCookie(PLAYER_NAME_COOKIE) ?? defaultPlayerName());
++    const [draftPlayerName, setDraftPlayerName] = useState(playerName);
++
+     const shareUrl = window.location.href;
++    const currentPlayer = room?.players.find((player) => player.id === playerId);
+     const isHost = Boolean(playerId && room?.hostPlayerId === playerId);
+ 
+     useEffect(() => {
++        writeCookie(PLAYER_NAME_COOKIE, playerName);
++    }, [playerName]);
++
++    useEffect(() => {
+         if (!roomCode) {
+             return;
+         }
+@@ -58,6 +96,8 @@
+         const hostToken = sessionStorage.getItem(`hostToken:${roomCode}`);
+         const socketUrl = new URL(`${WS_BASE}/ws/rooms/${roomCode}`);
+ 
++        socketUrl.searchParams.set("playerName", playerName);
++
+         if (hostToken) {
+             socketUrl.searchParams.set("hostToken", hostToken);
+         }
+@@ -164,6 +204,8 @@
+                 game,
+             })
+         );
++        setNotice(`Game changed to ${room?.supportedGames[game] ?? game}.`);
++        setIsManageOpen(false);
+     }
+ 
+     function kickPlayer(targetPlayerId: string) {
+@@ -175,6 +217,21 @@
+         );
+     }
+ 
++    function savePlayerName() {
++        const cleanedName = draftPlayerName.trim().replace(/\s+/g, " ").slice(0, 24) || defaultPlayerName();
++
++        setPlayerName(cleanedName);
++        writeCookie(PLAYER_NAME_COOKIE, cleanedName);
++        socketRef.current?.send(
++            JSON.stringify({
++                type: "set_name",
++                name: cleanedName,
++            })
++        );
++        setIsNameOpen(false);
++        setNotice("Name saved.");
++    }
++
+     async function copyInviteLink() {
+         await navigator.clipboard.writeText(shareUrl);
+         setNotice("Invite link copied.");
+@@ -226,7 +283,9 @@
+             <section className="room-header">
+                 <div>
+                     <h1>Lobby {roomCode}</h1>
+-                    <p>You are: {playerId ?? "Connecting..."} {isHost ? "(host)" : ""}</p>
++                    <p>
++                        You are: {currentPlayer?.name ?? playerName} {isHost ? "(host)" : ""}
++                    </p>
+                     <p>Players: {room?.players.length ?? 0}</p>
+                     <p>Game: {room?.supportedGames[room.gameName] ?? room?.gameName ?? "Loading..."}</p>
+                     {notice && <p className="notice">{notice}</p>}
+@@ -234,48 +293,24 @@
+ 
+                 <div className="room-actions">
+                     <button onClick={copyInviteLink}>Copy Invite Link</button>
+-                    <button className="secondary" onClick={startGame} disabled={!isHost}>
+-                        Start Game
++                    <button
++                        className="secondary"
++                        onClick={() => {
++                            setDraftPlayerName(playerName);
++                            setIsNameOpen(true);
++                        }}
++                    >
++                        Change Name
+                     </button>
++                    {isHost && (
++                        <button className="secondary" onClick={() => setIsManageOpen(true)}>
++                            Manage Lobby
++                        </button>
++                    )}
++                    {isHost && <button onClick={startGame}>Start Game</button>}
+                 </div>
+             </section>
+ 
+-            {isHost && room && (
+-                <section className="host-panel">
+-                    <div>
+-                        <h2>Host Controls</h2>
+-                        <label>
+-                            Game
+-                            <select value={room.gameName} onChange={(event) => changeGame(event.target.value)}>
+-                                {Object.entries(room.supportedGames).map(([gameId, gameLabel]) => (
+-                                    <option key={gameId} value={gameId}>{gameLabel}</option>
+-                                ))}
+-                            </select>
+-                        </label>
+-                    </div>
+-
+-                    <div>
+-                        <h2>Players</h2>
+-                        <div className="player-list">
+-                            {room.players.map((connectedPlayerId) => (
+-                                <div className="player-row" key={connectedPlayerId}>
+-                                    <span>
+-                                        {connectedPlayerId}
+-                                        {connectedPlayerId === room.hostPlayerId ? " · host" : ""}
+-                                    </span>
+-
+-                                    {connectedPlayerId !== playerId && (
+-                                        <button className="danger" onClick={() => kickPlayer(connectedPlayerId)}>
+-                                            Kick
+-                                        </button>
+-                                    )}
+-                                </div>
+-                            ))}
+-                        </div>
+-                    </div>
+-                </section>
+-            )}
+-
+             <section className="game-wrapper">
+                 <canvas
+                     ref={canvasRef}
+@@ -298,6 +333,101 @@
+             <p className="instructions">
+                 Desktop: use W/S or Arrow Up/Down. Phone: use the Up/Down buttons.
+             </p>
++
++            {isNameOpen && (
++                <div className="modal-backdrop" onClick={() => setIsNameOpen(false)}>
++                    <section className="modal-card compact-modal" onClick={(event) => event.stopPropagation()}>
++                        <div className="modal-header">
++                            <div>
++                                <p className="eyebrow">Profile</p>
++                                <h2>Change your display name</h2>
++                            </div>
++                            <button className="icon-button" onClick={() => setIsNameOpen(false)} aria-label="Close name editor">
++                                ×
++                            </button>
++                        </div>
++
++                        <label className="field-label">
++                            Display name
++                            <input
++                                value={draftPlayerName}
++                                maxLength={24}
++                                onChange={(event) => setDraftPlayerName(event.target.value)}
++                                onKeyDown={(event) => {
++                                    if (event.key === "Enter") {
++                                        savePlayerName();
++                                    }
++                                }}
++                                placeholder="Your name"
++                            />
++                        </label>
++
++                        <div className="modal-actions">
++                            <button className="secondary" onClick={() => setIsNameOpen(false)}>
++                                Cancel
++                            </button>
++                            <button onClick={savePlayerName}>Save Name</button>
++                        </div>
++                    </section>
++                </div>
++            )}
++
++            {isManageOpen && isHost && room && (
++                <div className="modal-backdrop" onClick={() => setIsManageOpen(false)}>
++                    <section className="modal-card" onClick={(event) => event.stopPropagation()}>
++                        <div className="modal-header">
++                            <div>
++                                <p className="eyebrow">Host controls</p>
++                                <h2>Manage Lobby</h2>
++                            </div>
++                            <button className="icon-button" onClick={() => setIsManageOpen(false)} aria-label="Close lobby manager">
++                                ×
++                            </button>
++                        </div>
++
++                        <div className="manager-section">
++                            <h3>Choose a game</h3>
++                            <div className="game-choice-grid">
++                                {Object.entries(room.supportedGames).map(([gameId, gameLabel]) => {
++                                    const selected = gameId === room.gameName;
++
++                                    return (
++                                        <button
++                                            key={gameId}
++                                            className={`game-choice ${selected ? "selected" : ""}`}
++                                            onClick={() => changeGame(gameId)}
++                                            disabled={selected}
++                                        >
++                                            <span>{gameLabel}</span>
++                                            <small>{selected ? "Selected" : "Switch game"}</small>
++                                        </button>
++                                    );
++                                })}
++                            </div>
++                        </div>
++
++                        <div className="manager-section">
++                            <h3>Players</h3>
++                            <div className="player-list">
++                                {room.players.map((connectedPlayer) => (
++                                    <div className="player-row" key={connectedPlayer.id}>
++                                        <span>
++                                            <strong>{connectedPlayer.name}</strong>
++                                            <small>{connectedPlayer.isHost ? "Host" : connectedPlayer.id}</small>
++                                        </span>
++
++                                        {connectedPlayer.id !== playerId && (
++                                            <button className="danger" onClick={() => kickPlayer(connectedPlayer.id)}>
++                                                Kick
++                                            </button>
++                                        )}
++                                    </div>
++                                ))}
++                            </div>
++                        </div>
++                    </section>
++                </div>
++            )}
+         </main>
+     );
+ }
+diff -ruN gp_old/GamblePigeon/frontend/src/styles.css gp2/GamblePigeon/frontend/src/styles.css
+--- gp_old/GamblePigeon/frontend/src/styles.css	2026-05-28 19:04:14.000000000 +0000
++++ gp2/GamblePigeon/frontend/src/styles.css	2026-05-28 19:11:02.827847253 +0000
+@@ -213,3 +213,133 @@
+         grid-template-columns: 1fr;
+     }
+ }
++
++.modal-backdrop {
++    position: fixed;
++    inset: 0;
++    z-index: 20;
++    display: grid;
++    place-items: center;
++    padding: 24px;
++    background: rgba(2, 6, 23, 0.72);
++    backdrop-filter: blur(10px);
++}
++
++.modal-card {
++    width: min(760px, 100%);
++    max-height: min(720px, 90vh);
++    overflow: auto;
++    background: #1e293b;
++    border: 1px solid #475569;
++    border-radius: 24px;
++    box-shadow: 0 24px 90px rgba(0, 0, 0, 0.45);
++    padding: 22px;
++}
++
++.compact-modal {
++    width: min(460px, 100%);
++}
++
++.modal-header {
++    display: flex;
++    justify-content: space-between;
++    gap: 16px;
++    align-items: flex-start;
++    margin-bottom: 22px;
++}
++
++.modal-header h2 {
++    margin: 2px 0 0;
++    font-size: 28px;
++}
++
++.eyebrow {
++    margin: 0;
++    color: #93c5fd;
++    font-size: 13px;
++    font-weight: 800;
++    letter-spacing: 0.08em;
++    text-transform: uppercase;
++}
++
++.icon-button {
++    width: 42px;
++    height: 42px;
++    display: grid;
++    place-items: center;
++    padding: 0;
++    border-radius: 999px;
++    background: #334155;
++    color: white;
++    font-size: 28px;
++    line-height: 1;
++}
++
++.manager-section {
++    display: grid;
++    gap: 12px;
++    margin-top: 20px;
++}
++
++.manager-section h3 {
++    margin: 0;
++    font-size: 18px;
++}
++
++.game-choice-grid {
++    display: grid;
++    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
++    gap: 12px;
++}
++
++.game-choice {
++    display: grid;
++    gap: 6px;
++    justify-items: start;
++    text-align: left;
++    min-height: 96px;
++    padding: 16px;
++    border: 1px solid #475569;
++    background: #0f172a;
++    color: white;
++}
++
++.game-choice span {
++    font-size: 20px;
++}
++
++.game-choice small,
++.player-row small {
++    color: #94a3b8;
++    font-weight: 700;
++}
++
++.game-choice.selected {
++    border-color: #22c55e;
++    background: #052e16;
++}
++
++.field-label {
++    display: grid;
++    gap: 8px;
++    color: #cbd5e1;
++    font-weight: 800;
++}
++
++.modal-actions {
++    display: flex;
++    justify-content: flex-end;
++    gap: 12px;
++    margin-top: 20px;
++}
++
++.player-row span {
++    display: grid;
++    gap: 2px;
++}
++
++@media (max-width: 700px) {
++    .modal-actions {
++        flex-direction: column-reverse;
++    }
++}
