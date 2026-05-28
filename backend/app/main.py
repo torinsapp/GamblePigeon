@@ -47,6 +47,10 @@ class NamePayload(BaseModel):
     displayName: str
 
 
+class CreateRoomPayload(BaseModel):
+    game: Optional[str] = "pong"
+
+
 def set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -156,13 +160,26 @@ def admin_update_account(account_id: int, payload: AdminAccountPayload, request:
     return {"account": serialize_account(updated_account)}
 
 
+@app.get("/games")
+def list_supported_games():
+    return {"games": SUPPORTED_GAMES}
+
+
 @app.post("/rooms")
-def create_lobby():
-    room = create_room()
+def create_lobby(payload: Optional[CreateRoomPayload] = None):
+    selected_game = payload.game if payload else "pong"
+
+    try:
+        room = create_room(selected_game or "pong")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
     return {
         "roomCode": room.code,
         "hostToken": room.host_token,
-        "url": f"/room/{room.code}"
+        "url": f"/room/{room.code}",
+        "game": room.game_name,
+        "supportedGames": SUPPORTED_GAMES,
     }
 
 

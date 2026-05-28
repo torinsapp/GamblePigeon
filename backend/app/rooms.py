@@ -126,9 +126,19 @@ def generate_room_code(length: int = 6) -> str:
             return code
 
 
-def create_room() -> Room:
+def create_room(game_name: str = "pong") -> Room:
+    normalized_game_name = game_name.lower().strip()
+
+    if normalized_game_name not in SUPPORTED_GAMES:
+        raise ValueError(f"Unsupported game: {game_name}")
+
     code = generate_room_code()
-    room = Room(code=code, host_token=secrets.token_urlsafe(24))
+    room = Room(
+        code=code,
+        host_token=secrets.token_urlsafe(24),
+        game_name=normalized_game_name,
+    )
+    room.reset_game()
     rooms[code] = room
     return room
 

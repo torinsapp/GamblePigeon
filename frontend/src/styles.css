@@ -292,6 +292,10 @@ button.danger {
     gap: 12px;
 }
 
+.home-game-choice-grid {
+    margin-top: 16px;
+}
+
 .game-choice {
     display: grid;
     gap: 6px;
