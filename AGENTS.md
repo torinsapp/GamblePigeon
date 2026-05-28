@@ -308,6 +308,7 @@ payout,
 admin edit account.
 What the AI should know about current user preference
 
+Use Patches to suggest specific file and function changes. 
 The user values direct, practical implementation help. They are actively debugging and iterating, so avoid vague architectural advice without concrete file/function changes. When a bug is reported, inspect both backend protocol and frontend UI assumptions. The biggest current pain points are:
 
 game switching not actually working,
