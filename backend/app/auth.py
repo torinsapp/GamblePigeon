@@ -213,6 +213,79 @@ def delete_session(token: Optional[str]) -> None:
         connection.execute("DELETE FROM sessions WHERE token_hash = ?", (hash_session_token(token),))
 
 
+
+def is_admin_account(account: Optional[Account]) -> bool:
+    return bool(account and account.username.lower() == "admin")
+
+
+def list_accounts() -> list[Account]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM accounts ORDER BY username COLLATE NOCASE"
+        ).fetchall()
+    return [row_to_account(row) for row in rows]
+
+
+def update_account_as_admin(
+    account_id: int,
+    username: Optional[str] = None,
+    display_name: Optional[str] = None,
+    balance: Optional[int] = None,
+    password: Optional[str] = None,
+) -> Optional[Account]:
+    account = get_account(account_id)
+    if not account:
+        return None
+
+    next_username = account.username
+    if username is not None:
+        next_username = normalize_username(username)
+
+    next_display_name = account.display_name
+    if display_name is not None:
+        next_display_name = clean_display_name(display_name, next_username)
+
+    next_balance = account.balance
+    if balance is not None:
+        if balance < 0:
+            raise ValueError("Balance cannot be negative.")
+        if balance > 1_000_000_000:
+            raise ValueError("Balance is too high.")
+        next_balance = int(balance)
+
+    password_salt = None
+    password_hash = None
+    if password:
+        validate_password(password)
+        salt = secrets.token_bytes(16)
+        password_salt = base64.b64encode(salt).decode("ascii")
+        password_hash = hash_password(password, salt)
+
+    try:
+        with get_connection() as connection:
+            if password_salt and password_hash:
+                connection.execute(
+                    """
+                    UPDATE accounts
+                    SET username = ?, display_name = ?, balance = ?, password_salt = ?, password_hash = ?
+                    WHERE id = ?
+                    """,
+                    (next_username, next_display_name, next_balance, password_salt, password_hash, account_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE accounts
+                    SET username = ?, display_name = ?, balance = ?
+                    WHERE id = ?
+                    """,
+                    (next_username, next_display_name, next_balance, account_id),
+                )
+    except sqlite3.IntegrityError:
+        raise ValueError("That username is already taken.")
+
+    return get_account(account_id)
+
 def get_account(account_id: Optional[int]) -> Optional[Account]:
     if not account_id:
         return None

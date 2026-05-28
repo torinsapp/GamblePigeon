@@ -14,8 +14,11 @@ from app.auth import (
     get_account,
     get_account_by_session_token,
     init_auth_db,
+    is_admin_account,
+    list_accounts,
     serialize_account,
     transfer_balance,
+    update_account_as_admin,
     update_display_name,
 )
 from app.rooms import SUPPORTED_GAMES, create_room, get_room, join_room, remove_player
@@ -60,6 +63,13 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
 
 
+
+class AdminAccountPayload(BaseModel):
+    username: Optional[str] = None
+    displayName: Optional[str] = None
+    balance: Optional[int] = None
+    password: Optional[str] = None
+
 def current_account_from_request(request: Request):
     return get_account_by_session_token(request.cookies.get(SESSION_COOKIE_NAME))
 
@@ -103,6 +113,15 @@ def logout(request: Request, response: Response):
     return {"ok": True}
 
 
+
+def require_admin_account(request: Request):
+    account = current_account_from_request(request)
+    if not account:
+        raise HTTPException(status_code=401, detail="You must be logged in.")
+    if not is_admin_account(account):
+        raise HTTPException(status_code=403, detail="Only the admin user can manage accounts.")
+    return account
+
 @app.patch("/auth/me/name")
 def update_my_name(payload: NamePayload, request: Request):
     account = current_account_from_request(request)
@@ -110,6 +129,30 @@ def update_my_name(payload: NamePayload, request: Request):
         raise HTTPException(status_code=401, detail="You must be logged in.")
 
     updated_account = update_display_name(account.id, payload.displayName)
+    return {"account": serialize_account(updated_account)}
+
+
+@app.get("/admin/accounts")
+def admin_list_accounts(request: Request):
+    require_admin_account(request)
+    return {"accounts": [serialize_account(account) for account in list_accounts()]}
+
+
+@app.patch("/admin/accounts/{account_id}")
+def admin_update_account(account_id: int, payload: AdminAccountPayload, request: Request):
+    require_admin_account(request)
+    try:
+        updated_account = update_account_as_admin(
+            account_id=account_id,
+            username=payload.username,
+            display_name=payload.displayName,
+            balance=payload.balance,
+            password=payload.password,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    if not updated_account:
+        raise HTTPException(status_code=404, detail="Account not found.")
     return {"account": serialize_account(updated_account)}
 
 
