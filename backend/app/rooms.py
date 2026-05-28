@@ -33,6 +33,10 @@ class Room:
     host_player_id: Optional[str] = None
     players: Dict[str, WebSocket] = field(default_factory=dict)
     player_names: Dict[str, str] = field(default_factory=dict)
+    player_account_ids: Dict[str, int] = field(default_factory=dict)
+    wager: int = 0
+    winning_score: int = 5
+    paid_out: bool = False
     game: PongGame = field(default_factory=PongGame)
 
     def is_host(self, player_id: str) -> bool:
@@ -54,6 +58,20 @@ class Room:
         # implemented game today.
         if normalized_game_name == "pong":
             self.game = PongGame()
+            self.paid_out = False
+
+    def set_wager(self, wager: int):
+        if self.game.started:
+            raise ValueError("You cannot change the wager after the game starts.")
+        if wager < 0:
+            raise ValueError("Wager cannot be negative.")
+        if wager > 1_000_000:
+            raise ValueError("Wager is too high.")
+        self.wager = wager
+
+    def reset_game(self):
+        self.game = PongGame()
+        self.paid_out = False
 
 
 rooms: Dict[str, Room] = {}
@@ -83,7 +101,8 @@ def join_room(
     room_code: str,
     websocket: WebSocket,
     host_token: Optional[str] = None,
-    player_name: Optional[str] = None
+    player_name: Optional[str] = None,
+    account_id: Optional[int] = None
 ) -> str:
     room = rooms[room_code.upper()]
 
@@ -96,6 +115,9 @@ def join_room(
 
     room.players[player_id] = websocket
     room.set_player_name(player_id, player_name)
+
+    if account_id is not None:
+        room.player_account_ids[player_id] = account_id
 
     if host_token and secrets.compare_digest(host_token, room.host_token):
         room.host_player_id = player_id
@@ -110,6 +132,7 @@ def remove_player(room_code: str, player_id: str):
 
     room.players.pop(player_id, None)
     room.player_names.pop(player_id, None)
+    room.player_account_ids.pop(player_id, None)
 
     if room.host_player_id == player_id:
         room.host_player_id = None

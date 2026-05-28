@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
+const API_BASE = "http://localhost:8000";
 const WS_BASE = "ws://localhost:8000";
 const PLAYER_NAME_COOKIE = "gamblepigeon_player_name";
+
+type Account = {
+    id: number;
+    username: string;
+    displayName: string;
+    balance: number;
+};
 
 type GameState = {
     width: number;
@@ -34,6 +42,8 @@ type RoomPlayer = {
     id: string;
     name: string;
     isHost: boolean;
+    isLoggedIn: boolean;
+    balance: number | null;
 };
 
 type RoomState = {
@@ -42,6 +52,8 @@ type RoomState = {
     hostPlayerId: string | null;
     gameName: string;
     supportedGames: Record<string, string>;
+    wager: number;
+    winningScore: number;
     game: GameState;
 };
 
@@ -75,18 +87,44 @@ export default function RoomPage() {
     const [playerId, setPlayerId] = useState<string | null>(null);
     const [room, setRoom] = useState<RoomState | null>(null);
     const [notice, setNotice] = useState<string | null>(null);
+    const [account, setAccount] = useState<Account | null>(null);
     const [isManageOpen, setIsManageOpen] = useState(false);
     const [isNameOpen, setIsNameOpen] = useState(false);
+    const [isAuthOpen, setIsAuthOpen] = useState(false);
+    const [authMode, setAuthMode] = useState<"login" | "register">("login");
+    const [authUsername, setAuthUsername] = useState("");
+    const [authDisplayName, setAuthDisplayName] = useState("");
+    const [authPassword, setAuthPassword] = useState("");
+    const [authMessage, setAuthMessage] = useState<string | null>(null);
     const [playerName, setPlayerName] = useState(() => readCookie(PLAYER_NAME_COOKIE) ?? defaultPlayerName());
     const [draftPlayerName, setDraftPlayerName] = useState(playerName);
+    const [draftWager, setDraftWager] = useState("0");
 
     const shareUrl = window.location.href;
     const currentPlayer = room?.players.find((player) => player.id === playerId);
     const isHost = Boolean(playerId && room?.hostPlayerId === playerId);
+    const currentDisplayName = currentPlayer?.name ?? account?.displayName ?? playerName;
+
+    useEffect(() => {
+        refreshAccount();
+    }, []);
 
     useEffect(() => {
         writeCookie(PLAYER_NAME_COOKIE, playerName);
     }, [playerName]);
+
+    useEffect(() => {
+        if (account) {
+            setPlayerName(account.displayName);
+            writeCookie(PLAYER_NAME_COOKIE, account.displayName);
+        }
+    }, [account]);
+
+    useEffect(() => {
+        if (room) {
+            setDraftWager(String(room.wager));
+        }
+    }, [room?.wager]);
 
     useEffect(() => {
         if (!roomCode) {
@@ -110,10 +148,22 @@ export default function RoomPage() {
 
             if (message.type === "joined") {
                 setPlayerId(message.playerId);
+                if (message.account) {
+                    setAccount(message.account);
+                }
             }
 
             if (message.type === "state") {
                 setRoom(message.room);
+            }
+
+            if (message.type === "account") {
+                setAccount(message.account);
+            }
+
+            if (message.type === "payout") {
+                setNotice(message.message);
+                refreshAccount();
             }
 
             if (message.type === "error") {
@@ -180,6 +230,53 @@ export default function RoomPage() {
         };
     }, []);
 
+    async function refreshAccount() {
+        const response = await fetch(`${API_BASE}/auth/me`, {
+            credentials: "include",
+        });
+        const data = await response.json();
+        setAccount(data.account ?? null);
+    }
+
+    async function submitAuth() {
+        setAuthMessage(null);
+
+        const response = await fetch(`${API_BASE}/auth/${authMode}`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                username: authUsername,
+                password: authPassword,
+                displayName: authDisplayName || authUsername,
+            }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            setAuthMessage(data.detail ?? "Unable to sign in.");
+            return;
+        }
+
+        setAccount(data.account);
+        setPlayerName(data.account.displayName);
+        writeCookie(PLAYER_NAME_COOKIE, data.account.displayName);
+        setAuthPassword("");
+        setAuthMessage("Signed in. Rejoining lobby with your account...");
+        window.setTimeout(() => window.location.reload(), 350);
+    }
+
+    async function logout() {
+        await fetch(`${API_BASE}/auth/logout`, {
+            method: "POST",
+            credentials: "include",
+        });
+        setAccount(null);
+        setNotice("Logged out. Rejoining lobby as a guest...");
+        window.setTimeout(() => window.location.reload(), 350);
+    }
+
     function sendPaddleDirection(direction: "up" | "down" | "none") {
         socketRef.current?.send(
             JSON.stringify({
@@ -208,6 +305,17 @@ export default function RoomPage() {
         setIsManageOpen(false);
     }
 
+    function saveWager() {
+        const nextWager = Math.max(0, Math.floor(Number(draftWager) || 0));
+        socketRef.current?.send(
+            JSON.stringify({
+                type: "set_wager",
+                wager: nextWager,
+            })
+        );
+        setNotice(nextWager > 0 ? `Wager set to $${nextWager}.` : "Wager disabled.");
+    }
+
     function kickPlayer(targetPlayerId: string) {
         socketRef.current?.send(
             JSON.stringify({
@@ -229,7 +337,7 @@ export default function RoomPage() {
             })
         );
         setIsNameOpen(false);
-        setNotice("Name saved.");
+        setNotice(account ? "Name saved to your account." : "Name saved on this browser.");
     }
 
     async function copyInviteLink() {
@@ -257,22 +365,18 @@ export default function RoomPage() {
 
         ctx.fillStyle = "white";
 
-        // Middle line
         for (let y = 0; y < game.height; y += 30) {
             ctx.fillRect(game.width / 2 - 2, y, 4, 15);
         }
 
-        // Paddles
         const p1 = game.paddles.player1;
         const p2 = game.paddles.player2;
 
         ctx.fillRect(p1.x, p1.y, p1.width, p1.height);
         ctx.fillRect(p2.x, p2.y, p2.width, p2.height);
 
-        // Ball
         ctx.fillRect(game.ball.x, game.ball.y, game.ball.size, game.ball.size);
 
-        // Score
         ctx.font = "32px Arial";
         ctx.fillText(String(game.score.player1), game.width / 2 - 70, 50);
         ctx.fillText(String(game.score.player2), game.width / 2 + 50, 50);
@@ -284,19 +388,30 @@ export default function RoomPage() {
                 <div>
                     <h1>Lobby {roomCode}</h1>
                     <p>
-                        You are: {currentPlayer?.name ?? playerName} {isHost ? "(host)" : ""}
+                        You are: {currentDisplayName} {isHost ? "(host)" : ""}
                     </p>
                     <p>Players: {room?.players.length ?? 0}</p>
                     <p>Game: {room?.supportedGames[room.gameName] ?? room?.gameName ?? "Loading..."}</p>
+                    <p>Wager: ${room?.wager ?? 0} · First to {room?.winningScore ?? 5}</p>
+                    {account ? (
+                        <p>Account: @{account.username} · Balance: ${account.balance}</p>
+                    ) : (
+                        <p>Guest mode · Log in to keep money and play wagers.</p>
+                    )}
                     {notice && <p className="notice">{notice}</p>}
                 </div>
 
                 <div className="room-actions">
                     <button onClick={copyInviteLink}>Copy Invite Link</button>
+                    {account ? (
+                        <button className="secondary" onClick={logout}>Log Out</button>
+                    ) : (
+                        <button className="secondary" onClick={() => setIsAuthOpen(true)}>Log In</button>
+                    )}
                     <button
                         className="secondary"
                         onClick={() => {
-                            setDraftPlayerName(playerName);
+                            setDraftPlayerName(currentDisplayName);
                             setIsNameOpen(true);
                         }}
                     >
@@ -333,6 +448,36 @@ export default function RoomPage() {
             <p className="instructions">
                 Desktop: use W/S or Arrow Up/Down. Phone: use the Up/Down buttons.
             </p>
+
+            {isAuthOpen && (
+                <div className="modal-backdrop" onClick={() => setIsAuthOpen(false)}>
+                    <section className="modal-card compact-modal" onClick={(event) => event.stopPropagation()}>
+                        <div className="modal-header">
+                            <div>
+                                <p className="eyebrow">Account</p>
+                                <h2>{authMode === "login" ? "Log in" : "Create account"}</h2>
+                            </div>
+                            <button className="icon-button" onClick={() => setIsAuthOpen(false)} aria-label="Close login">
+                                ×
+                            </button>
+                        </div>
+
+                        <div className="auth-panel inline-auth-panel">
+                            <div className="segmented-buttons">
+                                <button className={authMode === "login" ? "selected" : "secondary"} onClick={() => setAuthMode("login")}>Log in</button>
+                                <button className={authMode === "register" ? "selected" : "secondary"} onClick={() => setAuthMode("register")}>Register</button>
+                            </div>
+                            <input value={authUsername} onChange={(event) => setAuthUsername(event.target.value)} placeholder="Username" />
+                            {authMode === "register" && (
+                                <input value={authDisplayName} onChange={(event) => setAuthDisplayName(event.target.value)} placeholder="Display name" />
+                            )}
+                            <input value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} placeholder="Password" type="password" />
+                            <button onClick={submitAuth}>{authMode === "login" ? "Log In" : "Create Account"}</button>
+                            {authMessage && <p className="notice">{authMessage}</p>}
+                        </div>
+                    </section>
+                </div>
+            )}
 
             {isNameOpen && (
                 <div className="modal-backdrop" onClick={() => setIsNameOpen(false)}>
@@ -386,6 +531,21 @@ export default function RoomPage() {
                         </div>
 
                         <div className="manager-section">
+                            <h3>Wager</h3>
+                            <p className="helper-text">Set to 0 for a casual game. Wagered games require both player1 and player2 to be logged in and funded.</p>
+                            <div className="wager-row">
+                                <input
+                                    value={draftWager}
+                                    min={0}
+                                    type="number"
+                                    onChange={(event) => setDraftWager(event.target.value)}
+                                    placeholder="0"
+                                />
+                                <button onClick={saveWager}>Save Wager</button>
+                            </div>
+                        </div>
+
+                        <div className="manager-section">
                             <h3>Choose a game</h3>
                             <div className="game-choice-grid">
                                 {Object.entries(room.supportedGames).map(([gameId, gameLabel]) => {
@@ -413,7 +573,10 @@ export default function RoomPage() {
                                     <div className="player-row" key={connectedPlayer.id}>
                                         <span>
                                             <strong>{connectedPlayer.name}</strong>
-                                            <small>{connectedPlayer.isHost ? "Host" : connectedPlayer.id}</small>
+                                            <small>
+                                                {connectedPlayer.isHost ? "Host" : connectedPlayer.id}
+                                                {connectedPlayer.isLoggedIn ? ` · $${connectedPlayer.balance ?? 0}` : " · Guest"}
+                                            </small>
                                         </span>
 
                                         {connectedPlayer.id !== playerId && (

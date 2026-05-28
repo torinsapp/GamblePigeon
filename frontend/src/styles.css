@@ -343,3 +343,81 @@ button.danger {
         flex-direction: column-reverse;
     }
 }
+
+.home-card {
+    max-width: 520px;
+}
+
+.account-panel {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 12px;
+    align-items: center;
+    padding: 14px;
+    border: 1px solid #334155;
+    border-radius: 16px;
+    background: #0f172a;
+}
+
+.account-panel div {
+    display: grid;
+    gap: 2px;
+}
+
+.account-panel span,
+.helper-text {
+    color: #94a3b8;
+    font-size: 14px;
+}
+
+.auth-panel {
+    display: grid;
+    gap: 12px;
+    padding: 14px;
+    border: 1px solid #334155;
+    border-radius: 16px;
+    background: #0f172a;
+}
+
+.inline-auth-panel {
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+.segmented-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.segmented-buttons button {
+    padding: 10px 12px;
+}
+
+.segmented-buttons button.selected {
+    background: #22c55e;
+    color: #052e16;
+}
+
+.small-button {
+    padding: 8px 12px;
+    font-size: 14px;
+}
+
+.wager-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px;
+    align-items: center;
+}
+
+@media (max-width: 700px) {
+    .account-panel {
+        grid-template-columns: 1fr;
+    }
+
+    .wager-row {
+        grid-template-columns: 1fr;
+    }
+}
