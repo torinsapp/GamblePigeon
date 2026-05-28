@@ -138,6 +138,8 @@ def read_room(room_code: str):
         "wager": room.wager,
         "winningScore": room.winning_score,
         "pongBallSpeed": room.pong_ball_speed,
+        "poolTableSpeed": room.pool_table_speed,
+        "poolMaxShotPower": room.pool_max_shot_power,
         "maxPauseSeconds": room.max_pause_seconds,
         "pausesPerPlayer": room.pauses_per_player,
     }
@@ -179,7 +181,26 @@ async def websocket_room(
 
             if message_type == "paddle":
                 direction = message.get("direction")
-                room.game.set_paddle_direction(player_id, direction)
+                if hasattr(room.game, "set_paddle_direction"):
+                    room.game.set_paddle_direction(player_id, direction)
+                await broadcast_room_state(room_code)
+
+            elif message_type == "pool_shot":
+                if not hasattr(room.game, "shoot"):
+                    await websocket.send_json({"type": "error", "message": "Pool shots are only available in 8-ball pool."})
+                    continue
+
+                try:
+                    room.game.shoot(
+                        player_id,
+                        float(message.get("dx", 0)),
+                        float(message.get("dy", 0)),
+                        float(message.get("power", 0)),
+                    )
+                except (TypeError, ValueError) as error:
+                    await websocket.send_json({"type": "error", "message": str(error)})
+                    continue
+
                 await broadcast_room_state(room_code)
 
             elif message_type == "start":
@@ -231,6 +252,8 @@ async def websocket_room(
                         pong_ball_speed=float(message.get("pongBallSpeed", room.pong_ball_speed)),
                         max_pause_seconds=int(message.get("maxPauseSeconds", room.max_pause_seconds)),
                         pauses_per_player=int(message.get("pausesPerPlayer", room.pauses_per_player)),
+                        pool_table_speed=float(message.get("poolTableSpeed", room.pool_table_speed)),
+                        pool_max_shot_power=float(message.get("poolMaxShotPower", room.pool_max_shot_power)),
                     )
                 except (TypeError, ValueError) as error:
                     await websocket.send_json({"type": "error", "message": str(error)})
@@ -416,6 +439,8 @@ async def broadcast_room_state(room_code: str):
                     "wager": room.wager,
                     "winningScore": room.winning_score,
                     "pongBallSpeed": room.pong_ball_speed,
+                    "poolTableSpeed": room.pool_table_speed,
+                    "poolMaxShotPower": room.pool_max_shot_power,
                     "maxPauseSeconds": room.max_pause_seconds,
                     "pausesPerPlayer": room.pauses_per_player,
                     "game": room.game.to_dict()

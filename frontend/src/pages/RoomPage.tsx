@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { useParams } from "react-router-dom";
 
 const API_BASE = "http://localhost:8000";
@@ -12,33 +12,62 @@ type Account = {
     balance: number;
 };
 
+type PoolBall = {
+    number: number;
+    kind: "cue" | "solid" | "stripe" | "eight";
+    x: number;
+    y: number;
+    radius: number;
+    pocketed: boolean;
+};
+
+type PoolPocket = {
+    x: number;
+    y: number;
+    radius: number;
+};
+
 type GameState = {
+    kind: "pong" | "pool";
     width: number;
     height: number;
     started: boolean;
     finished: boolean;
     winner: string | null;
-    winningScore: number;
-    ballSpeed: number;
     paused: boolean;
     pausedBy: string | null;
     pauseSecondsRemaining: number;
     maxPauseSeconds: number;
     pausesPerPlayer: number;
     pauseCounts: Record<string, number>;
-    paddles: {
+
+    // Pong state
+    winningScore?: number;
+    ballSpeed?: number;
+    paddles?: {
         player1: Paddle;
         player2: Paddle;
     };
-    ball: {
+    ball?: {
         x: number;
         y: number;
         size: number;
     };
-    score: {
+    score?: {
         player1: number;
         player2: number;
     };
+
+    // 8-ball pool state
+    currentTurn?: string;
+    groups?: Record<string, "solid" | "stripe" | null>;
+    message?: string;
+    tableSpeed?: number;
+    maxShotPower?: number;
+    shotInMotion?: boolean;
+    rail?: number;
+    balls?: PoolBall[];
+    pockets?: PoolPocket[];
 };
 
 type Paddle = {
@@ -65,6 +94,8 @@ type RoomState = {
     wager: number;
     winningScore: number;
     pongBallSpeed: number;
+    poolTableSpeed: number;
+    poolMaxShotPower: number;
     maxPauseSeconds: number;
     pausesPerPlayer: number;
     game: GameState;
@@ -96,6 +127,7 @@ export default function RoomPage() {
 
     const socketRef = useRef<WebSocket | null>(null);
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const poolAimStartRef = useRef<{ x: number; y: number } | null>(null);
 
     const [playerId, setPlayerId] = useState<string | null>(null);
     const [room, setRoom] = useState<RoomState | null>(null);
@@ -114,6 +146,8 @@ export default function RoomPage() {
     const [draftWager, setDraftWager] = useState("0");
     const [draftWinningScore, setDraftWinningScore] = useState("5");
     const [draftPongBallSpeed, setDraftPongBallSpeed] = useState("5");
+    const [draftPoolTableSpeed, setDraftPoolTableSpeed] = useState("0.985");
+    const [draftPoolMaxShotPower, setDraftPoolMaxShotPower] = useState("22");
     const [draftMaxPauseSeconds, setDraftMaxPauseSeconds] = useState("30");
     const [draftPausesPerPlayer, setDraftPausesPerPlayer] = useState("2");
 
@@ -150,10 +184,12 @@ export default function RoomPage() {
             setDraftWager(String(room.wager));
             setDraftWinningScore(String(room.winningScore));
             setDraftPongBallSpeed(String(room.pongBallSpeed));
+            setDraftPoolTableSpeed(String(room.poolTableSpeed));
+            setDraftPoolMaxShotPower(String(room.poolMaxShotPower));
             setDraftMaxPauseSeconds(String(room.maxPauseSeconds));
             setDraftPausesPerPlayer(String(room.pausesPerPlayer));
         }
-    }, [room?.wager, room?.winningScore, room?.pongBallSpeed, room?.maxPauseSeconds, room?.pausesPerPlayer]);
+    }, [room?.wager, room?.winningScore, room?.pongBallSpeed, room?.poolTableSpeed, room?.poolMaxShotPower, room?.maxPauseSeconds, room?.pausesPerPlayer]);
 
     useEffect(() => {
         if (!roomCode) {
@@ -345,6 +381,8 @@ export default function RoomPage() {
     function saveGameSettings() {
         const winningScore = Math.max(1, Math.min(50, Math.floor(Number(draftWinningScore) || 5)));
         const pongBallSpeed = Math.max(3, Math.min(14, Number(draftPongBallSpeed) || 5));
+        const poolTableSpeed = Math.max(0.92, Math.min(0.995, Number(draftPoolTableSpeed) || 0.985));
+        const poolMaxShotPower = Math.max(8, Math.min(32, Number(draftPoolMaxShotPower) || 22));
         const maxPauseSeconds = Math.max(5, Math.min(300, Math.floor(Number(draftMaxPauseSeconds) || 30)));
         const pausesPerPlayer = Math.max(0, Math.min(20, Math.floor(Number(draftPausesPerPlayer) || 0)));
 
@@ -353,11 +391,13 @@ export default function RoomPage() {
                 type: "set_game_settings",
                 winningScore,
                 pongBallSpeed,
+                poolTableSpeed,
+                poolMaxShotPower,
                 maxPauseSeconds,
                 pausesPerPlayer,
             })
         );
-        setNotice(`Game settings saved. First to ${winningScore}, ball speed ${pongBallSpeed}, ${pausesPerPlayer} pause(s) each.`);
+        setNotice(`Game settings saved. Pong first to ${winningScore}, Pong speed ${pongBallSpeed}, pool power ${poolMaxShotPower}, ${pausesPerPlayer} pause(s) each.`);
     }
 
     function saveWager() {
@@ -408,7 +448,77 @@ export default function RoomPage() {
         setNotice("Invite link copied.");
     }
 
+    function canvasPoint(event: PointerEvent<HTMLCanvasElement>) {
+        const canvas = canvasRef.current;
+        if (!canvas) {
+            return null;
+        }
+
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (event.clientX - rect.left) * (canvas.width / rect.width),
+            y: (event.clientY - rect.top) * (canvas.height / rect.height),
+        };
+    }
+
+    function handleCanvasPointerDown(event: PointerEvent<HTMLCanvasElement>) {
+        if (room?.game.kind !== "pool" || !room.game.started || room.game.finished || room.game.paused) {
+            return;
+        }
+
+        const point = canvasPoint(event);
+        const cueBall = room.game.balls?.find((ball) => ball.number === 0 && !ball.pocketed);
+
+        if (!point || !cueBall) {
+            return;
+        }
+
+        if (Math.hypot(point.x - cueBall.x, point.y - cueBall.y) <= cueBall.radius * 2.5) {
+            poolAimStartRef.current = point;
+        }
+    }
+
+    function handleCanvasPointerUp(event: PointerEvent<HTMLCanvasElement>) {
+        if (room?.game.kind !== "pool" || !poolAimStartRef.current) {
+            poolAimStartRef.current = null;
+            return;
+        }
+
+        const point = canvasPoint(event);
+        const cueBall = room.game.balls?.find((ball) => ball.number === 0 && !ball.pocketed);
+
+        if (!point || !cueBall) {
+            poolAimStartRef.current = null;
+            return;
+        }
+
+        const dx = cueBall.x - point.x;
+        const dy = cueBall.y - point.y;
+        const dragDistance = Math.hypot(dx, dy);
+        const maxShotPower = room.game.maxShotPower ?? room.poolMaxShotPower;
+        const power = Math.max(0.5, Math.min(maxShotPower, dragDistance / 7));
+
+        socketRef.current?.send(
+            JSON.stringify({
+                type: "pool_shot",
+                dx,
+                dy,
+                power,
+            })
+        );
+
+        poolAimStartRef.current = null;
+    }
+
     function drawGame(game: GameState) {
+        if (game.kind === "pool") {
+            drawPool(game);
+        } else {
+            drawPong(game);
+        }
+    }
+
+    function drawPong(game: GameState) {
         const canvas = canvasRef.current;
 
         if (!canvas) {
@@ -422,28 +532,113 @@ export default function RoomPage() {
         }
 
         ctx.clearRect(0, 0, game.width, game.height);
-
         ctx.fillStyle = "#111827";
         ctx.fillRect(0, 0, game.width, game.height);
-
         ctx.fillStyle = "white";
 
         for (let y = 0; y < game.height; y += 30) {
             ctx.fillRect(game.width / 2 - 2, y, 4, 15);
         }
 
-        const p1 = game.paddles.player1;
-        const p2 = game.paddles.player2;
+        const p1 = game.paddles?.player1;
+        const p2 = game.paddles?.player2;
 
-        ctx.fillRect(p1.x, p1.y, p1.width, p1.height);
-        ctx.fillRect(p2.x, p2.y, p2.width, p2.height);
+        if (p1 && p2) {
+            ctx.fillRect(p1.x, p1.y, p1.width, p1.height);
+            ctx.fillRect(p2.x, p2.y, p2.width, p2.height);
+        }
 
-        ctx.fillRect(game.ball.x, game.ball.y, game.ball.size, game.ball.size);
+        if (game.ball) {
+            ctx.fillRect(game.ball.x, game.ball.y, game.ball.size, game.ball.size);
+        }
 
         ctx.font = "32px Arial";
-        ctx.fillText(String(game.score.player1), game.width / 2 - 70, 50);
-        ctx.fillText(String(game.score.player2), game.width / 2 + 50, 50);
+        ctx.fillText(String(game.score?.player1 ?? 0), game.width / 2 - 70, 50);
+        ctx.fillText(String(game.score?.player2 ?? 0), game.width / 2 + 50, 50);
 
+        drawStatusOverlay(ctx, game);
+    }
+
+    function drawPool(game: GameState) {
+        const canvas = canvasRef.current;
+
+        if (!canvas) {
+            return;
+        }
+
+        const ctx = canvas.getContext("2d");
+
+        if (!ctx) {
+            return;
+        }
+
+        ctx.clearRect(0, 0, game.width, game.height);
+        ctx.fillStyle = "#6b3f24";
+        ctx.fillRect(0, 0, game.width, game.height);
+        ctx.fillStyle = "#0f7a4f";
+        ctx.fillRect(game.rail ?? 38, game.rail ?? 38, game.width - (game.rail ?? 38) * 2, game.height - (game.rail ?? 38) * 2);
+
+        ctx.fillStyle = "#020617";
+        for (const pocket of game.pockets ?? []) {
+            ctx.beginPath();
+            ctx.arc(pocket.x, pocket.y, pocket.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        for (const ball of game.balls ?? []) {
+            if (ball.pocketed) {
+                continue;
+            }
+
+            ctx.beginPath();
+            ctx.fillStyle = poolBallColor(ball);
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = "rgba(255,255,255,0.85)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            if (ball.number > 0) {
+                ctx.fillStyle = "white";
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.radius * 0.52, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "#111827";
+                ctx.font = "10px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(String(ball.number), ball.x, ball.y + 0.5);
+                ctx.textAlign = "start";
+                ctx.textBaseline = "alphabetic";
+            }
+        }
+
+        const cueBall = game.balls?.find((ball) => ball.number === 0 && !ball.pocketed);
+        if (cueBall && playerId === game.currentTurn && game.started && !game.finished && !game.paused && !game.shotInMotion) {
+            ctx.strokeStyle = "rgba(255,255,255,0.35)";
+            ctx.setLineDash([6, 8]);
+            ctx.beginPath();
+            ctx.moveTo(cueBall.x, cueBall.y);
+            ctx.lineTo(cueBall.x + 85, cueBall.y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        ctx.fillStyle = "rgba(255,255,255,0.9)";
+        ctx.font = "18px Arial";
+        ctx.fillText(game.message ?? "8-ball pool", 52, 28);
+
+        drawStatusOverlay(ctx, game);
+    }
+
+    function poolBallColor(ball: PoolBall) {
+        if (ball.number === 0) return "#f8fafc";
+        if (ball.number === 8) return "#020617";
+        if (ball.kind === "solid") return "#facc15";
+        return "#2563eb";
+    }
+
+    function drawStatusOverlay(ctx: CanvasRenderingContext2D, game: GameState) {
         if (game.paused) {
             ctx.fillStyle = "rgba(2, 6, 23, 0.72)";
             ctx.fillRect(0, 0, game.width, game.height);
@@ -469,6 +664,7 @@ export default function RoomPage() {
         }
     }
 
+
     return (
         <main className="room-page">
             <section className="room-header">
@@ -479,7 +675,7 @@ export default function RoomPage() {
                     </p>
                     <p>Players: {room?.players.length ?? 0}</p>
                     <p>Game: {room?.supportedGames[room.gameName] ?? room?.gameName ?? "Loading..."}</p>
-                    <p>Wager: ${room?.wager ?? 0} · First to {room?.winningScore ?? 5} · Ball speed {room?.pongBallSpeed ?? 5}</p>
+                    <p>Wager: ${room?.wager ?? 0} · {room?.gameName === "pool" ? `Pool power ${room.poolMaxShotPower}` : `First to ${room?.winningScore ?? 5} · Ball speed ${room?.pongBallSpeed ?? 5}`}</p>
                     <p>Pauses: {pausesRemaining}/{room?.pausesPerPlayer ?? 2} left · Max {room?.maxPauseSeconds ?? 30}s</p>
                     {room?.game.paused && <p className="pause-banner">Paused by {pausedByName}. Resumes in {room.game.pauseSecondsRemaining}s.</p>}
                     {account ? (
@@ -530,21 +726,27 @@ export default function RoomPage() {
                     width={800}
                     height={500}
                     className="game-canvas"
+                    onPointerDown={handleCanvasPointerDown}
+                    onPointerUp={handleCanvasPointerUp}
                 />
             </section>
 
-            <section className="mobile-controls">
-                <button onPointerDown={() => sendPaddleDirection("up")} onPointerUp={() => sendPaddleDirection("none")}>
-                    Up
-                </button>
+            {room?.game.kind !== "pool" && (
+                <section className="mobile-controls">
+                    <button onPointerDown={() => sendPaddleDirection("up")} onPointerUp={() => sendPaddleDirection("none")}>
+                        Up
+                    </button>
 
-                <button onPointerDown={() => sendPaddleDirection("down")} onPointerUp={() => sendPaddleDirection("none")}>
-                    Down
-                </button>
-            </section>
+                    <button onPointerDown={() => sendPaddleDirection("down")} onPointerUp={() => sendPaddleDirection("none")}>
+                        Down
+                    </button>
+                </section>
+            )}
 
             <p className="instructions">
-                Desktop: use W/S or Arrow Up/Down. Phone: use the Up/Down buttons.
+                {room?.game.kind === "pool"
+                    ? "8-ball: click/drag from the cue ball opposite the direction you want to shoot, then release."
+                    : "Desktop: use W/S or Arrow Up/Down. Phone: use the Up/Down buttons."}
                 {winnerName && room?.game.finished ? ` ${winnerName} won!` : ""}
                 {room?.game.paused ? ` Paused by ${pausedByName}; resumes automatically.` : ""}
             </p>
@@ -647,7 +849,7 @@ export default function RoomPage() {
 
                         <div className="manager-section">
                             <h3>Game Settings</h3>
-                            <p className="helper-text">These can be changed before the host starts the game. Pong currently supports first-to score, ball speed, and pause rules.</p>
+                            <p className="helper-text">These can be changed before the host starts the game. Pong supports first-to score and ball speed. 8-ball supports table speed and max shot power. Both games use the pause rules.</p>
                             <div className="settings-grid">
                                 <label className="field-label">
                                     First to
@@ -669,6 +871,31 @@ export default function RoomPage() {
                                         step={0.5}
                                         type="number"
                                         onChange={(event) => setDraftPongBallSpeed(event.target.value)}
+                                    />
+                                </label>
+
+
+                                <label className="field-label">
+                                    Pool table speed
+                                    <input
+                                        value={draftPoolTableSpeed}
+                                        min={0.92}
+                                        max={0.995}
+                                        step={0.005}
+                                        type="number"
+                                        onChange={(event) => setDraftPoolTableSpeed(event.target.value)}
+                                    />
+                                </label>
+
+                                <label className="field-label">
+                                    Pool max shot power
+                                    <input
+                                        value={draftPoolMaxShotPower}
+                                        min={8}
+                                        max={32}
+                                        step={1}
+                                        type="number"
+                                        onChange={(event) => setDraftPoolMaxShotPower(event.target.value)}
                                     />
                                 </label>
 
@@ -709,7 +936,7 @@ export default function RoomPage() {
                                             key={gameId}
                                             className={`game-choice ${selected ? "selected" : ""}`}
                                             onClick={() => changeGame(gameId)}
-                                            disabled={selected}
+                                            disabled={selected || room.game.started}
                                         >
                                             <span>{gameLabel}</span>
                                             <small>{selected ? "Selected" : "Switch game"}</small>

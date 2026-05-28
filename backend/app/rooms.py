@@ -7,9 +7,11 @@ from typing import Dict, Optional
 from fastapi import WebSocket
 
 from app.pong import PongGame
+from app.pool import PoolGame
 
 SUPPORTED_GAMES = {
-    "pong": "Pong"
+    "pong": "Pong",
+    "pool": "8-Ball Pool"
 }
 
 
@@ -37,6 +39,8 @@ class Room:
     wager: int = 0
     winning_score: int = 5
     pong_ball_speed: float = 5
+    pool_table_speed: float = 0.985
+    pool_max_shot_power: float = 22
     max_pause_seconds: int = 30
     pauses_per_player: int = 2
     paid_out: bool = False
@@ -59,11 +63,7 @@ class Room:
 
         self.game_name = normalized_game_name
 
-        # Reset the game instance when the lobby changes games. This keeps the
-        # rest of the app ready for more games later while Pong is the only
-        # implemented game today.
-        if normalized_game_name == "pong":
-            self.reset_game()
+        self.reset_game()
 
     def set_wager(self, wager: int):
         if self.game.started:
@@ -80,6 +80,8 @@ class Room:
             pong_ball_speed: float,
             max_pause_seconds: int,
             pauses_per_player: int,
+            pool_table_speed: float = None,
+            pool_max_shot_power: float = None,
     ):
         if self.game.started:
             raise ValueError("You cannot change game settings after the game starts.")
@@ -88,15 +90,27 @@ class Room:
         self.pong_ball_speed = PongGame.clean_ball_speed(pong_ball_speed)
         self.max_pause_seconds = PongGame.clean_max_pause_seconds(max_pause_seconds)
         self.pauses_per_player = PongGame.clean_pauses_per_player(pauses_per_player)
+        if pool_table_speed is not None:
+            self.pool_table_speed = PoolGame.clean_table_speed(pool_table_speed)
+        if pool_max_shot_power is not None:
+            self.pool_max_shot_power = PoolGame.clean_max_shot_power(pool_max_shot_power)
         self.reset_game()
 
     def reset_game(self):
-        self.game = PongGame(
-            winning_score=self.winning_score,
-            ball_speed=self.pong_ball_speed,
-            max_pause_seconds=self.max_pause_seconds,
-            pauses_per_player=self.pauses_per_player,
-        )
+        if self.game_name == "pool":
+            self.game = PoolGame(
+                max_pause_seconds=self.max_pause_seconds,
+                pauses_per_player=self.pauses_per_player,
+                table_speed=self.pool_table_speed,
+                max_shot_power=self.pool_max_shot_power,
+            )
+        else:
+            self.game = PongGame(
+                winning_score=self.winning_score,
+                ball_speed=self.pong_ball_speed,
+                max_pause_seconds=self.max_pause_seconds,
+                pauses_per_player=self.pauses_per_player,
+            )
         self.paid_out = False
 
 

@@ -217,6 +217,7 @@ class PongGame:
 
     def to_dict(self):
         return {
+            "kind": "pong",
             "width": self.width,
             "height": self.height,
             "started": self.started,
