@@ -16,6 +16,10 @@ type GameState = {
     width: number;
     height: number;
     started: boolean;
+    finished: boolean;
+    winner: string | null;
+    winningScore: number;
+    ballSpeed: number;
     paddles: {
         player1: Paddle;
         player2: Paddle;
@@ -54,6 +58,7 @@ type RoomState = {
     supportedGames: Record<string, string>;
     wager: number;
     winningScore: number;
+    pongBallSpeed: number;
     game: GameState;
 };
 
@@ -99,11 +104,16 @@ export default function RoomPage() {
     const [playerName, setPlayerName] = useState(() => readCookie(PLAYER_NAME_COOKIE) ?? defaultPlayerName());
     const [draftPlayerName, setDraftPlayerName] = useState(playerName);
     const [draftWager, setDraftWager] = useState("0");
+    const [draftWinningScore, setDraftWinningScore] = useState("5");
+    const [draftPongBallSpeed, setDraftPongBallSpeed] = useState("5");
 
     const shareUrl = window.location.href;
     const currentPlayer = room?.players.find((player) => player.id === playerId);
     const isHost = Boolean(playerId && room?.hostPlayerId === playerId);
     const currentDisplayName = currentPlayer?.name ?? account?.displayName ?? playerName;
+    const winnerName = room?.game.winner
+        ? room.players.find((player) => player.id === room.game.winner)?.name ?? room.game.winner
+        : null;
 
     useEffect(() => {
         refreshAccount();
@@ -123,8 +133,10 @@ export default function RoomPage() {
     useEffect(() => {
         if (room) {
             setDraftWager(String(room.wager));
+            setDraftWinningScore(String(room.winningScore));
+            setDraftPongBallSpeed(String(room.pongBallSpeed));
         }
-    }, [room?.wager]);
+    }, [room?.wager, room?.winningScore, room?.pongBallSpeed]);
 
     useEffect(() => {
         if (!roomCode) {
@@ -164,6 +176,10 @@ export default function RoomPage() {
             if (message.type === "payout") {
                 setNotice(message.message);
                 refreshAccount();
+            }
+
+            if (message.type === "game_over") {
+                setNotice(message.message);
             }
 
             if (message.type === "error") {
@@ -305,6 +321,20 @@ export default function RoomPage() {
         setIsManageOpen(false);
     }
 
+    function saveGameSettings() {
+        const winningScore = Math.max(1, Math.min(50, Math.floor(Number(draftWinningScore) || 5)));
+        const pongBallSpeed = Math.max(3, Math.min(14, Number(draftPongBallSpeed) || 5));
+
+        socketRef.current?.send(
+            JSON.stringify({
+                type: "set_game_settings",
+                winningScore,
+                pongBallSpeed,
+            })
+        );
+        setNotice(`Game settings saved. First to ${winningScore}, ball speed ${pongBallSpeed}.`);
+    }
+
     function saveWager() {
         const nextWager = Math.max(0, Math.floor(Number(draftWager) || 0));
         socketRef.current?.send(
@@ -380,6 +410,18 @@ export default function RoomPage() {
         ctx.font = "32px Arial";
         ctx.fillText(String(game.score.player1), game.width / 2 - 70, 50);
         ctx.fillText(String(game.score.player2), game.width / 2 + 50, 50);
+
+        if (game.finished) {
+            ctx.fillStyle = "rgba(2, 6, 23, 0.72)";
+            ctx.fillRect(0, 0, game.width, game.height);
+            ctx.fillStyle = "white";
+            ctx.font = "42px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("Game Over", game.width / 2, game.height / 2 - 16);
+            ctx.font = "24px Arial";
+            ctx.fillText("Start again when everyone is ready", game.width / 2, game.height / 2 + 28);
+            ctx.textAlign = "start";
+        }
     }
 
     return (
@@ -392,7 +434,7 @@ export default function RoomPage() {
                     </p>
                     <p>Players: {room?.players.length ?? 0}</p>
                     <p>Game: {room?.supportedGames[room.gameName] ?? room?.gameName ?? "Loading..."}</p>
-                    <p>Wager: ${room?.wager ?? 0} · First to {room?.winningScore ?? 5}</p>
+                    <p>Wager: ${room?.wager ?? 0} · First to {room?.winningScore ?? 5} · Ball speed {room?.pongBallSpeed ?? 5}</p>
                     {account ? (
                         <p>Account: @{account.username} · Balance: ${account.balance}</p>
                     ) : (
@@ -422,7 +464,9 @@ export default function RoomPage() {
                             Manage Lobby
                         </button>
                     )}
-                    {isHost && <button onClick={startGame}>Start Game</button>}
+                    {isHost && <button onClick={startGame} disabled={room?.game.started}>
+                        {room?.game.finished ? "Start New Game" : room?.game.started ? "Game Running" : "Start Game"}
+                    </button>}
                 </div>
             </section>
 
@@ -447,6 +491,7 @@ export default function RoomPage() {
 
             <p className="instructions">
                 Desktop: use W/S or Arrow Up/Down. Phone: use the Up/Down buttons.
+                {winnerName && room?.game.finished ? ` ${winnerName} won!` : ""}
             </p>
 
             {isAuthOpen && (
@@ -542,6 +587,37 @@ export default function RoomPage() {
                                     placeholder="0"
                                 />
                                 <button onClick={saveWager}>Save Wager</button>
+                            </div>
+                        </div>
+
+                        <div className="manager-section">
+                            <h3>Game Settings</h3>
+                            <p className="helper-text">These can be changed before the host starts the game. Pong currently supports first-to score and ball speed.</p>
+                            <div className="settings-grid">
+                                <label className="field-label">
+                                    First to
+                                    <input
+                                        value={draftWinningScore}
+                                        min={1}
+                                        max={50}
+                                        type="number"
+                                        onChange={(event) => setDraftWinningScore(event.target.value)}
+                                    />
+                                </label>
+
+                                <label className="field-label">
+                                    Pong ball speed
+                                    <input
+                                        value={draftPongBallSpeed}
+                                        min={3}
+                                        max={14}
+                                        step={0.5}
+                                        type="number"
+                                        onChange={(event) => setDraftPongBallSpeed(event.target.value)}
+                                    />
+                                </label>
+
+                                <button onClick={saveGameSettings} disabled={room.game.started}>Save Settings</button>
                             </div>
                         </div>
 

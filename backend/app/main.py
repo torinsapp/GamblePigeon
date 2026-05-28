@@ -137,6 +137,7 @@ def read_room(room_code: str):
         "supportedGames": SUPPORTED_GAMES,
         "wager": room.wager,
         "winningScore": room.winning_score,
+        "pongBallSpeed": room.pong_ball_speed,
     }
 
 
@@ -190,7 +191,7 @@ async def websocket_room(
                     continue
 
                 room.reset_game()
-                room.game.started = True
+                room.game.start()
                 await broadcast_room_state(room_code)
 
             elif message_type == "set_name":
@@ -211,6 +212,22 @@ async def websocket_room(
 
                 try:
                     room.set_wager(int(message.get("wager", 0)))
+                except (TypeError, ValueError) as error:
+                    await websocket.send_json({"type": "error", "message": str(error)})
+                    continue
+
+                await broadcast_room_state(room_code)
+
+            elif message_type == "set_game_settings":
+                if not room.is_host(player_id):
+                    await websocket.send_json({"type": "error", "message": "Only the lobby host can change game settings."})
+                    continue
+
+                try:
+                    room.set_game_settings(
+                        winning_score=int(message.get("winningScore", room.winning_score)),
+                        pong_ball_speed=float(message.get("pongBallSpeed", room.pong_ball_speed)),
+                    )
                 except (TypeError, ValueError) as error:
                     await websocket.send_json({"type": "error", "message": str(error)})
                     continue
@@ -249,8 +266,15 @@ async def websocket_room(
                 await broadcast_room_state(room_code)
 
             elif message_type == "tick":
+                if not room.is_host(player_id):
+                    continue
+
+                was_finished = room.game.finished
                 room.game.tick()
-                await maybe_pay_winner(room_code)
+
+                if room.game.finished and not was_finished:
+                    await maybe_finish_game(room_code)
+
                 await broadcast_room_state(room_code)
 
     except WebSocketDisconnect:
@@ -280,23 +304,27 @@ def validate_wager_can_start(room) -> Optional[str]:
     return None
 
 
-async def maybe_pay_winner(room_code: str):
+async def maybe_finish_game(room_code: str):
     room = get_room(room_code)
-    if not room or room.paid_out or room.wager <= 0:
+    if not room or room.paid_out:
         return
 
-    score = room.game.score
-    winner_player_id = None
-    loser_player_id = None
+    winner_player_id = room.game.winner
 
-    if score["player1"] >= room.winning_score:
-        winner_player_id = "player1"
+    if winner_player_id == "player1":
         loser_player_id = "player2"
-    elif score["player2"] >= room.winning_score:
-        winner_player_id = "player2"
+    elif winner_player_id == "player2":
         loser_player_id = "player1"
+    else:
+        return
 
-    if not winner_player_id or not loser_player_id:
+    if room.wager <= 0:
+        room.paid_out = True
+        await broadcast_message(room_code, {
+            "type": "game_over",
+            "message": f"{room.player_names.get(winner_player_id, winner_player_id)} won the game.",
+            "winnerPlayerId": winner_player_id,
+        })
         return
 
     winner_account_id = room.player_account_ids.get(winner_player_id)
@@ -309,7 +337,6 @@ async def maybe_pay_winner(room_code: str):
         transfer_balance(winner_account_id, loser_account_id, room.wager)
         winner = get_account(winner_account_id)
         loser = get_account(loser_account_id)
-        room.game.started = False
         room.paid_out = True
 
         await broadcast_message(room_code, {
@@ -370,6 +397,7 @@ async def broadcast_room_state(room_code: str):
                     "supportedGames": SUPPORTED_GAMES,
                     "wager": room.wager,
                     "winningScore": room.winning_score,
+                    "pongBallSpeed": room.pong_ball_speed,
                     "game": room.game.to_dict()
                 }
             })

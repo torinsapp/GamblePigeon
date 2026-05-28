@@ -36,6 +36,7 @@ class Room:
     player_account_ids: Dict[str, int] = field(default_factory=dict)
     wager: int = 0
     winning_score: int = 5
+    pong_ball_speed: float = 5
     paid_out: bool = False
     game: PongGame = field(default_factory=PongGame)
 
@@ -46,6 +47,9 @@ class Room:
         self.player_names[player_id] = clean_player_name(name, player_id)
 
     def set_game(self, game_name: str):
+        if self.game.started:
+            raise ValueError("You cannot change the game after it starts.")
+
         normalized_game_name = game_name.lower().strip()
 
         if normalized_game_name not in SUPPORTED_GAMES:
@@ -57,8 +61,7 @@ class Room:
         # rest of the app ready for more games later while Pong is the only
         # implemented game today.
         if normalized_game_name == "pong":
-            self.game = PongGame()
-            self.paid_out = False
+            self.reset_game()
 
     def set_wager(self, wager: int):
         if self.game.started:
@@ -69,8 +72,19 @@ class Room:
             raise ValueError("Wager is too high.")
         self.wager = wager
 
+    def set_game_settings(self, winning_score: int, pong_ball_speed: float):
+        if self.game.started:
+            raise ValueError("You cannot change game settings after the game starts.")
+
+        self.winning_score = PongGame.clean_winning_score(winning_score)
+        self.pong_ball_speed = PongGame.clean_ball_speed(pong_ball_speed)
+        self.reset_game()
+
     def reset_game(self):
-        self.game = PongGame()
+        self.game = PongGame(
+            winning_score=self.winning_score,
+            ball_speed=self.pong_ball_speed,
+        )
         self.paid_out = False
 
 
