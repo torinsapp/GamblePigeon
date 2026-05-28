@@ -445,8 +445,8 @@ button.danger {
     font-weight: 800;
 }
 
-.admin-page { margin: 0 auto; padding: 2rem; }
-.admin-card { display: grid; gap: 1.25rem; }
+.admin-page { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+.admin-card { max-width: 100% ; display: grid; gap: 1.25rem; }
 .admin-header { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; }
 .admin-header-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: flex-end; }
 .admin-table-wrapper { overflow-x: auto; }
